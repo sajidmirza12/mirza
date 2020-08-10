@@ -1,0 +1,355 @@
+Model
+<?php
+
+namespace App;
+
+use App\Cat;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\SoftDeletes;
+
+class Blog extends Model
+{
+	use SoftDeletes;
+    protected $guarded = [];
+
+
+    public function cats()
+    {
+    	return $this->belongsToMany('App\Cat', 'blog_cat');
+    }
+
+    public function getRouteKeyName()
+    {
+    	return 'slug';
+    }
+}
+
+Controller
+
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Blog;
+use App\Cat;
+use Image;
+use File;
+use Illuminate\Http\Request;
+
+class BlogController extends Controller
+{
+    /**
+     * Display a listing of the resource.
+     *
+     * @return \Illuminate\Http\Response
+     */
+    public function index()
+    {
+        $blogs  = Blog::all();
+        return view('admin.blogs.index', compact('blogs'));
+    }
+
+
+    public function trash()
+    {
+        $blogs = Blog::onlyTrashed()->get();
+        return view('admin.blogs.index', compact('blogs'));
+    }
+
+    public function recover($id)
+    {
+        $blog = Blog::onlyTrashed()->findOrFail($id);
+        if($blog->restore()){
+            return back()->with('message', 'Data Successfully Restored..!!');
+        }else{
+            return back()->with('message', 'Data Failled...!!');
+        }
+    }
+
+    /**
+     * Show the form for creating a new resource.
+     *
+     * @return \Illuminate\Http\Response
+     */
+    public function create()
+    {
+        $cats = Cat::all();
+        return view('admin.blogs.create', compact('cats'));
+    }
+
+    /**
+     * Store a newly created resource in storage.
+     *
+     * @param  \Illuminate\Http\Request  $request
+     * @return \Illuminate\Http\Response
+     */
+    public function store(Request $request)
+    {
+        $request->validate([
+            'title'         => 'required',
+            'slug'          => 'required|unique:blogs',
+            'keywords'      => 'required|max:200|min:3',
+            'description'   => 'required|max:200|min:3',
+            'content'       => 'required',
+            'thumbnail'     => 'required',
+            'cat_id'        => 'required',
+        ]);
+
+        if($request->hasFile('thumbnail')){
+            $thumbnail = $request->file('thumbnail');
+            $filename = uniqid(). '.' .$request->thumbnail->getClientOriginalExtension();
+            Image::make($thumbnail)->resize(500,500)->save( public_path('blogs/'.$filename) );
+        }
+
+        $blog = Blog::create([
+            'title'             => $request->title,
+            'slug'              => $request->slug,
+            'keywords'          => $request->keywords,
+            'description'       => $request->description,
+            'content'           => $request->content,
+            'thumbnail'         => $filename,
+            'auth'              => $request->auth,
+        ]);
+
+        if($blog){
+            $blog->cats()->attach($request->cat_id, ['created_at'=>now(), 'updated_at'=>now()]);
+            return back()->with('message', 'Data Successfully Added..!!');
+        }else{
+            return back()->with('message', 'Data Failled..!!');
+        }
+    }
+
+    /**
+     * Display the specified resource.
+     *
+     * @param  \App\Blog  $blog
+     * @return \Illuminate\Http\Response
+     */
+    public function show(Blog $blog)
+    {
+        //
+    }
+
+    /**
+     * Show the form for editing the specified resource.
+     *
+     * @param  \App\Blog  $blog
+     * @return \Illuminate\Http\Response
+     */
+    public function edit(Blog $blog)
+    {
+        $cats = Cat::all();
+        return view('admin.blogs.create', compact('cats', 'blog'));
+    }
+
+    /**
+     * Update the specified resource in storage.
+     *
+     * @param  \Illuminate\Http\Request  $request
+     * @param  \App\Blog  $blog
+     * @return \Illuminate\Http\Response
+     */
+    public function update(Request $request, Blog $blog)
+    {
+        if($request->hasFile('thumbnail')){
+            $oldiamge = Blog::where('id', $blog->id)->value('thumbnail');
+            $fullpath = public_path('blogs/'.$oldiamge);
+            File::delete($fullpath);
+
+            $thumbnail = $request->file('thumbnail');
+            $filename = uniqid(). '.' .$request->thumbnail->getClientOriginalExtension();
+            Image::make($thumbnail)->resize(500,500)->save( public_path('blogs/'.$filename) );
+        }else{
+            $filename = Blog::where('id', $blog->id)->value('thumbnail');
+        }
+
+        $blog->title            = $request->title;
+        $blog->slug             = $request->slug;
+        $blog->keywords         = $request->keywords;
+        $blog->description      = $request->description;
+        $blog->content          = $request->content;
+        $blog->thumbnail        = $filename;
+        $blog->auth             = $request->auth;
+        $blog->cats()->detach();
+
+        if($blog->save()){
+            $blog->cats()->attach($request->cat_id, ['created_at'=>now(), 'updated_at'=>now()]);
+            return redirect( route('admin.blog.index') )->with('message', 'Data Successfully Updated..!!');
+        }else{
+            return back()->with('message', 'Data Failled...!!');
+        }
+    }
+
+
+    public function remove(Blog $blog)
+    {
+        if($blog->delete()){
+            return back()->with('message', 'Data Successfully Trashed..!!');
+        }else{
+            return back()->with('message', 'Data Failled...!!');
+        }
+    }
+
+    /**
+     * Remove the specified resource from storage.
+     *
+     * @param  \App\Blog  $blog
+     * @return \Illuminate\Http\Response
+     */
+    public function destroy(Blog $blog)
+    {
+        if($blog->cats()->detach() && $blog->forceDelete()){
+            unlink( public_path('blogs/'.$blog->thumbnail) );
+            return back()->with('message', 'Data Successfully Deleted..!!');
+        }else{
+            return back()->with('message', 'Data Failled...!!');
+        }
+    }
+}
+
+
+
+View
+
+@extends('admin.app')
+@section('breadcrumbs')
+<li class="breadcrumb-item active"><a href="{{route('admin.blog.index')}}">View All Blogs</a></li>
+<li class="breadcrumb-item active">Create/Edit Blog </li>
+@endsection
+@section('content')
+<div class="col-sm-12">
+<form action="@if(isset($blog)) {{route('admin.blog.update', $blog)}} @else {{route('admin.blog.store')}} @endif" method="post" accept-charset="utf-8" enctype="multipart/form-data">
+  @csrf
+  @if(isset($blog))
+    @method('PUT')
+  @endif
+  <div class="form-group row">
+    <div class="col-sm-12">
+      @if ($errors->any())
+      <div class="alert alert-danger">
+        <ul>
+          @foreach ($errors->all() as $error)
+          <li>{{ $error }}</li>
+          @endforeach
+        </ul>
+      </div>
+      @endif
+    </div>
+    <div class="col-sm-12">
+      @if (session()->has('message'))
+      <div class="alert alert-success">
+        {{session('message')}}
+      </div>
+      @endif
+    </div>
+  <div class="col-sm-9">
+   <div class="form-group row">   
+    <div class="col-sm-12">
+      <label class="form-control-label">Title: </label>
+      <input type="text" id="txturl" name="title" class="form-control " value="{{@$blog->title}}">
+      <p class="small">{{config('app.url')}}<span id="url">{{@$blog->slug}}</span></p>
+      <input type="hidden" name="slug" id="slug" value="{{@$blog->slug}}">
+    </div>
+  </div>
+  <div class="form-group row">
+    <div class="col-sm-12">
+      <label class="form-control-label">Keywords: </label>
+      <input type="text" id="txturl" name="keywords" class="form-control " value="{{@$blog->keywords}}" maxlength="200">
+    </div>
+  </div>
+  <div class="form-group row">
+    <div class="col-sm-12">
+      <label class="form-control-label">Description: </label>
+      <input type="text" id="txturl" name="description" class="form-control " value="{{@$blog->description}}" maxlength="160">
+    </div>
+
+    <div class="col-sm-12">
+      <label class="form-control-label">Content: </label>
+      <textarea name="content" id="editor" class="form-control " rows="10" cols="80" >{!! @$blog->content !!}</textarea>
+    </div>
+  </div>
+</div>
+
+
+<div class="col-sm-3  p-2">
+  <ul class="list-group shadow">
+    <li class="list-group-item rounded-0 active bg-info"><h6 class="text-center text-uppercase">Blog Image</h6></li>
+      <li class="list-group-item">
+        <div class="input-group mb-3">
+          <div class="custom-file ">
+            <input type="file"  class="custom-file-input" name="thumbnail" id="thumbnail">
+            <label class="custom-file-label" for="thumbnail">Choose file</label>
+          </div>
+        </div>
+        <div class="img-thumbnail  text-center">
+          <img src="@if(isset($blog)) {{asset('public/blogs/'.$blog->thumbnail)}} @else {{asset('public/images/no-thumbnail.jpeg')}} @endif" id="imgthumbnail" class="img-fluid" alt="">
+        </div>
+      </li>
+  </ul>
+
+  <div class="form-group row">
+    @php 
+      $ids = (isset($blog->cats) && $blog->cats->count() > 0 ) ? Arr::get($blog->cats, 'id') : null
+    @endphp
+    <div class="col-sm-12">
+    <li class="list-group-item rounded-0 active bg-info"><h6 class="text-center text-uppercase">Add Blog Categories</h6></li>
+      <select class="form-control" id="category_id" name="cat_id[]" multiple="multiple" required="">
+        @if(isset($cats))
+        @foreach($cats as $cat)
+        <option class="form-control" value="{{$cat->id}}" @if(!is_null($ids) && in_array($cat->id, $ids)) {{'selected'}} @endif>{{$cat->title}}</option>
+        @endforeach
+        @endif
+        option
+      </select>
+    </div>
+  </div>
+  <div class="form-group row">
+    <div class="col-sm-12">
+      @if(isset($blog))
+      <input type="submit" name="submit" class="btn btn-success btn-sm form-control" value="Update blog" />
+      @else
+      <input type="submit" name="submit" class="btn btn-primary btn-sm form-control" value="Add blog" />
+      @endif
+    </div>
+  </div>
+</div>
+</div>
+
+  
+</form>
+</div>
+@endsection
+@section('scripts')
+<script type="text/javascript">
+$(function(){
+  ClassicEditor.create( document.querySelector( '#editor' ), {
+    toolbar: [ 'Heading', 'Link', 'bold', 'italic', 'bulletedList', 'numberedList', 'blockQuote','undo', 'redo' ],
+  }).then( editor => {
+    console.log( editor );
+  }).catch( error => {
+    console.error( error );
+  });
+  $('#txturl').on('keyup', function(){
+    var url = slugify($(this).val());
+    $('#url').html(url);
+    $('#slug').val(url);
+  })
+  $('#category_id').select2({
+    placeholder: "Select a Parent subcategory",
+    allowClear: true,
+    minimumResultsForSearch: Infinity
+  });
+})
+$('#thumbnail').on('change', function() {
+var file = $(this).get(0).files;
+var reader = new FileReader();
+reader.readAsDataURL(file[0]);
+reader.addEventListener("load", function(e) {
+var image = e.target.result;
+$("#imgthumbnail").attr('src', image);
+});
+});
+</script>
+@endsection
+
+
